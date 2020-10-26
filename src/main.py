@@ -1,5 +1,4 @@
-from os import terminal_size
-from gym import envs
+import shutil
 import numpy as np
 import torch
 from stable_baselines3.common.vec_env.subproc_vec_env import SubprocVecEnv
@@ -16,12 +15,13 @@ WeightPath = Path(__file__).parent.parent/'weights/rnn'
 NumProcess = 8
 NumStep = 128
 NumEpoch = 4
-NumEpisode = 1000
+NumEpisode = 4000
 BatchSize = 256
 ImgSize = (1, 80, 80)
 lr = 2.5e-4
 weight_decay = 0
 epsilon = 0.1
+gru_size = 256
 
 def T(x, cuda=True):
     if x.dtype in (np.int8, np.int16, np.int32, np.int64, np.bool):
@@ -61,7 +61,7 @@ def main():
     epsilons = np.linspace(epsilon, 0, num=n_updates, endpoint=False)
     global_step = 0
     envs = SubprocVecEnv([lambda: make_env(i) for i in range(NumProcess)])
-    model_gpu = torch.jit.script(Model().cuda())
+    model_gpu = torch.jit.script(Model(gru_size).cuda())
     optimizer = torch.optim.Adam(model_gpu.parameters(), weight_decay=weight_decay)
     sampler = BatchSampler(SubsetRandomSampler(range(NumProcess*NumStep)),BatchSize,drop_last=False)
     storage_sz = (NumStep, NumProcess)
@@ -71,11 +71,12 @@ def main():
         'value':T(np.zeros(storage_sz), cuda=True),
         'x':T(np.zeros([*storage_sz, *ImgSize]), cuda=True),
         'action':T(np.zeros(storage_sz), cuda=True),
-        'hidden': T(np.zeros([*storage_sz, 32]), cuda=True),
+        'hidden': T(np.zeros([*storage_sz, gru_size]), cuda=True),
     }
 
+    # model_gpu.eval()
     x = T(prepro(imgs=envs.reset()), cuda=True)
-    hidden_pre = T(np.zeros([NumProcess, 32]), cuda=True)
+    hidden_pre = T(np.zeros([NumProcess, gru_size]), cuda=True)
     with torch.no_grad():
         p, value, hidden_suf = model_gpu(x, hidden_pre)
 
@@ -84,6 +85,7 @@ def main():
     for episode in range(NumEpisode):
         agent_start = time.time()
 
+        # model_gpu.eval()
         for step in range(NumStep):
             action = (torch.rand(NumProcess, device='cuda') > p) + 2
             storage['hidden'][step] = hidden_pre
@@ -93,7 +95,7 @@ def main():
             storage['value'][step] = value
             x, reward, done, info = envs.step(action.cpu().numpy())
             storage['reward'][step] = T(reward, cuda=True)
-            hidden_suf[done] = T(np.zeros(32), cuda=True)
+            hidden_suf[done] = T(np.zeros(gru_size), cuda=True)
             x = T(prepro(x), cuda=True)
             with torch.no_grad():
                 hidden_pre = hidden_suf
@@ -106,11 +108,12 @@ def main():
         advantage = target_value - storage['value']
         target_value_flatten = target_value.view(-1)
         advantage_flatten = advantage.view(-1)
-        hidden_flatten = storage['hidden'].view(-1, 32)
+        hidden_flatten = storage['hidden'].view(-1, gru_size)
         x_flatten = storage['x'].view(-1, *ImgSize)
         action_flatten = storage['action'].view(-1)
         p_flatten = storage['p'].view(-1)
 
+        # model_gpu.train()
         for epoch in range(NumEpoch):
             for idx in sampler:
                 for pg in optimizer.param_groups:
@@ -119,9 +122,9 @@ def main():
                 p_new = (action_flatten[idx]==2).float()*p_new + (action_flatten[idx]==3).float()*(1-p_new)
                 ratio = p_new / p_flatten[idx]
                 policy_loss = -torch.sum(torch.min(
-                    ratio,
-                    torch.clamp(ratio, 1-epsilons[global_step], 1+epsilons[global_step])
-                ) * advantage_flatten[idx])
+                    ratio * advantage_flatten[idx],
+                    torch.clamp(ratio, 1-epsilon, 1+epsilon) * advantage_flatten[idx]
+                ))
                 value_loss = torch.sum((target_value_flatten[idx] - value_new)**2)
                 loss = policy_loss + value_loss
                 optimizer.zero_grad()
@@ -141,5 +144,6 @@ def main():
             agent_time = 0
         
 if __name__ == '__main__':
+    shutil.rmtree(WeightPath)
     WeightPath.mkdir(exist_ok=True)
     main()
