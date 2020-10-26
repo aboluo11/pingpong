@@ -3,7 +3,6 @@ import numpy as np
 import torch
 from stable_baselines3.common.vec_env.subproc_vec_env import SubprocVecEnv
 import gym
-from torch._C import device
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 from pathlib import Path
 import time
