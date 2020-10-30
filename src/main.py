@@ -7,10 +7,10 @@ from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 from pathlib import Path
 import time
 import math
+import argparse
 
 from model import Model
 
-WeightPath = Path(__file__).parent.parent/'weights/rnn'
 NumProcess = 8
 NumStep = 128
 NumEpoch = 4
@@ -124,6 +124,7 @@ def main():
                     ratio * advantage_flatten[idx],
                     torch.clamp(ratio, 1-epsilon, 1+epsilon) * advantage_flatten[idx]
                 ))
+                # policy_loss = -torch.sum(ratio * advantage_flatten[idx])
                 value_loss = torch.sum((target_value_flatten[idx] - value_new)**2)
                 loss = policy_loss + value_loss
                 optimizer.zero_grad()
@@ -143,6 +144,11 @@ def main():
             agent_time = 0
         
 if __name__ == '__main__':
-    shutil.rmtree(WeightPath)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--weight_path', required=True, type=str)
+    args = parser.parse_args()
+    WeightPath = Path(__file__).parent.parent/f'weights/{args.weight_path}'
+    if WeightPath.exists():
+        shutil.rmtree(WeightPath)
     WeightPath.mkdir(exist_ok=True)
     main()

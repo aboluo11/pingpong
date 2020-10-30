@@ -27,13 +27,17 @@ class Model(nn.Module):
         )
         self.policy = nn.Linear(gru_sz, 1)
         self.critic = nn.Linear(gru_sz, 1)
-        self.gru = nn.GRUCell(gru_sz,gru_sz)
+        self.rnn = nn.Sequential(
+            nn.Linear(2*gru_sz, gru_sz),
+            nn.Tanh()
+        )
+        # self.gru = nn.GRUCell(gru_sz,gru_sz)
 
     def forward(self, x, state):
         x = (x-x.mean())/x.std()
         x = self.convs(x)
-        x = state = self.gru(x, state)
-        p = self.policy(x).view(-1)
+        state = self.rnn(torch.cat([x, state], dim=1))
+        p = self.policy(state).view(-1)
         p = torch.sigmoid(p)
-        value = self.critic(x).view(-1)
+        value = self.critic(state).view(-1)
         return p, value, state
